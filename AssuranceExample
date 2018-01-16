@@ -1,0 +1,20 @@
+# Reference: http://www.ncbi.nlm.nih.gov/pubmed/19499510
+
+library(MASS) 
+sprob <- function(pmean,csd,oldsize,newsize) { 
+  psd <- sqrt(2/oldsize)*csd 
+  ssd <- sqrt(2/newsize)*csd 
+  low <- pmean-5*psd 
+  f <-10*psd/100000 
+  total <-0 
+  weight <-0 
+  for(i in 1:100000) { 
+    x <- low + f * i 
+    w <- dnorm(x,mean=pmean,sd=psd,log= FALSE) 
+    weight <- weight+w 
+    power <- pnorm(1.96*ssd,mean=x,sd=ssd,lower.tail =FALSE,log.p = FALSE) 
+    total <- total + power*w} 
+  avg <- total/weight 
+  avg }
+sprob(2.5,7.14,25,128)
+

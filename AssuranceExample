@@ -18,7 +18,7 @@ sprob <- function(pmean,csd,oldsize,newsize) {
   avg }
 sprob(2.5,7.14,25,128)
 
-# ---------- 2nd Example ---------------------------------------------------
+# ---------- 2nd Example for calculating power ----------------------------
 # ‘Assuming the treatment difference is 8.5 points 
 #  better than placebo, and a known s2 of 400, 
 #  we have 90% power to achieve a statistically significant 

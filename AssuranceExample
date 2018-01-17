@@ -18,3 +18,32 @@ sprob <- function(pmean,csd,oldsize,newsize) {
   avg }
 sprob(2.5,7.14,25,128)
 
+# ---------- 2nd Example ---------------------------------------------------
+# ‘Assuming the treatment difference is 8.5 points 
+#  better than placebo, and a known s2 of 400, 
+#  we have 90% power to achieve a statistically significant 
+#  result with 100 people per arm’
+#  How could this be obtained via simulation?
+  
+library(tidyverse)
+truthRange <- seq(-2,15,by=0.5)
+sd <- 20
+
+stde <- sd*sqrt(2/100)
+crt <- qnorm(1-0.05/2,0,1)
+sim <- expand.grid(truth = truthRange, i=1:50)
+sim <- sim %>% 
+  group_by(truth,i) %>% 
+  mutate(x = rnorm(1,truth,stde),
+         zobs = x/stde,
+         success = ifelse(zobs > crt,1,0)) %>% 
+  ungroup()
+summary(sim)
+
+str(sim)
+sim %>% 
+  group_by(truth) %>% 
+  summarise(power = sum(success)/n()) %>% 
+  ggplot(aes(x=truth,y=power)) +
+  geom_point() +
+  stat_smooth()

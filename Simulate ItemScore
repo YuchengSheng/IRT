@@ -1,0 +1,145 @@
+
+# Simulation from R is too slow
+
+rm(list=ls(all.names=TRUE))
+graphics.off()
+
+library(tidyverse)
+library(stringr)
+library(knitr)
+library(ggExtra)
+setwd("C:/Users/ys278065/Desktop/IRT")
+
+runname <- "run136"
+tab_file <- paste0(runname,".ext")
+
+# extraw <- read.table(file=tab_file,skip=1,header=T,
+#                    fill=T,blank.lines.skip = T)
+extraw <- read_table(tab_file,skip=1)
+# Item parameters
+paramI <- extraw %>%
+  filter(ITERATION==-1000000000) %>%
+  select(THETA1:THETA165) %>%
+  gather(THETA1:THETA165,key="THETA",value="Value") %>%
+  mutate(THETA = as.numeric(str_replace(THETA, "THETA", "")))
+# Slope parameters
+paramS <- extraw %>%
+  filter(ITERATION==-1000000000) %>%
+  select(THETA166:THETA167) %>%
+  gather(THETA166:THETA167,key="THETA",value="Value") %>%
+  mutate(THETA = as.numeric(str_replace(THETA, "THETA", "")))
+TDslope <- paramS$Value[1]
+BLonSlope <- paramS$Value[2]
+# Omega values
+paramO <- extraw %>%
+  filter(ITERATION==-1000000000) %>%
+  select(paste0("OMEGA(",1:13,",",1:13,")")) %>%
+  gather(key="OMEGA",value="Value")
+ODslope <- paramO$Value[2]
+IOVD <- paramO$Value[3]
+
+paramI_t <- paramI %>%
+  mutate(ITEM = (row_number() -1) %/% 5 +1,
+         lag1 = lag(Value),
+         lag2 = lag(Value,n=2),
+         lag3 = lag(Value,n=3),
+         VALUE = case_when(
+           (row_number() -1) %% 5 == 0 ~ Value,
+           (row_number() -1) %% 5 == 1 ~ Value,
+           (row_number() -1) %% 5 == 2 ~ Value + lag1,
+           (row_number() -1) %% 5 == 3 ~ Value + lag1 +lag2,
+           (row_number() -1) %% 5 == 4 ~ Value + lag1 +lag2 + lag3)) %>%
+  select(c(ITEM,THETA,VALUE))
+
+nestparam_t <- paramI_t %>%
+  select(-THETA) %>%
+  group_by(ITEM) %>%
+  nest() 
+
+####################################################
+fPropItemDISF <- function (para,ItemID,DIAB = 0,ID = 0,EVENT = 99){
+  para <- unlist(para)
+  DIS = para[1]
+  DIF1 = para[2]
+  DIF2 = para[3]
+  DIF3 = para[4]
+  DIF4 = para[5]
+
+  PL1 = exp(DIS*DIAB - DIF1)/(1+exp(DIS*DIAB - DIF1))
+  PL2 = exp(DIS*DIAB - DIF2)/(1+exp(DIS*DIAB - DIF2))
+  PL3 = exp(DIS*DIAB - DIF3)/(1+exp(DIS*DIAB - DIF3))
+  PL4 = exp(DIS*DIAB - DIF4)/(1+exp(DIS*DIAB - DIF4))
+
+  tmptb <- tibble(ID = ID,
+         DIAB = DIAB,
+         ITEM = ItemID,
+         EVENT = EVENT,
+         PL1 = PL1,
+         PL2 = PL2,
+         PL3 = PL3,
+         PL4 = PL4)
+  tmptb %>% 
+    group_by(ID, DIAB, ITEM, EVENT) %>% 
+    mutate(randv = runif(1),
+           DV = case_when(
+                     randv <= PL4 ~ 4,
+                     randv <= PL3 ~ 3,
+                     randv <= PL2 ~ 2,
+                     randv <= PL1 ~ 1,
+                     TRUE ~ 0
+                   ))
+}
+# Predicted proportion from popolation (typical) Disability
+predProp <-  pmap(list(para = nestparam_t$data,
+                       ItemID = nestparam_t$ITEM),fPropItemDISF) %>%
+  reduce(bind_rows)
+
+predProp
+runif(33)
+
+
+# Set conditions for simulation -------------------------------------------
+
+
+Nsub <- 800
+ID <- 1:Nsub
+# Baseline
+DBL <- rnorm(Nsub,0,1)
+EVENT <- 0
+
+
+IndBLParam <- expand.grid(ID = ID,
+                        ITEM = nestparam_t$ITEM) %>%
+  left_join(tibble(ID,DBL,EVENT),by=c("ID")) %>%
+  left_join(nestparam_t,by="ITEM")  %>%
+  select(ID,EVENT,DBL,ITEM,data) %>% 
+  arrange(ID,EVENT,DBL)
+
+BaselineItemScore <- pmap(list(para = IndBLParam$data,
+                             ItemID = IndBLParam$ITEM,
+                             DIAB =IndBLParam$DBL,
+                             ID = IndBLParam$ID,
+                             EVENT = IndBLParam$EVENT),
+                        fPropItemDISF) %>%
+  reduce(bind_rows)
+
+
+BLtotal <- BaselineItemScore %>% 
+  group_by(ID) %>% 
+  summarise(BTOTAL = sum(DV))
+
+BLtotal %>% 
+  ggplot() +
+  geom_histogram(aes(x=BTOTAL),bins=20)
+
+summary(BLtotal$BTOTAL)
+
+BaselineItemScore %>% 
+  group_by(ID) %>% 
+  slice(1) %>% 
+  ggplot() +
+  geom_histogram(aes(x=DIAB),bins=20)
+
+
+summary(BaselineItemScore$DIAB)
+var(BaselineItemScore$DIAB)

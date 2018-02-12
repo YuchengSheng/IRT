@@ -15,7 +15,7 @@ NsamplePrior <- 100
 # PriorSD <- 0.09
 PriorMin <- 0.1
 PriorMax <- 0.5
-
+set.seed(1)
 # SampleE <- rnorm(NsamplePrior,PriorMean,PriorSD)
 SampleE <- runif(NsamplePrior,PriorMin,PriorMax)
 # Check the samples of drug effect

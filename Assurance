@@ -1,0 +1,431 @@
+
+### Introduction & setup #########################################
+### Calculate assurance from simulated NONMEM data file (run001-run100)
+### Item parameters from the final model(run133) & 
+### selected item mode (run134)
+### Created Date: 17th November 2017
+### Created by Yucheng Sheng
+### Modified Date: 30th January 2018
+### Note: mirtCAT for estimating Disability from fixed item parameters
+###       use function and purrr::map 
+
+rm(list=ls(all.names=TRUE))
+graphics.off()
+library(tidyverse)
+library(stringr)
+library(mirtCAT)
+
+### Objects for Disability estimation #############################
+## Creat 3 objects to estimate individual Disability
+## from obtained item parameters (3 objects)
+## 1.obj for all 33 items from the final model(run033)
+## 2.objr for selected items from the final model(run033)
+## 3.objr2 for selected items from the model(run034) from the same items
+## Get the item parameters from the final 33 items model result
+## Transform to aD + d  (d = -ab) from aD - ab  (run033)
+## ab is a hybrid parmeter in the model
+
+setwd("C:/Users/ys278065/Desktop/IRT")
+
+# function for calculating item parameters from model results
+fItemPara <- function(runname,itemNo) {
+  extraw <- read_table(paste0(runname,".ext"),skip=1)
+  
+  param <- extraw %>%
+    filter(ITERATION==-1000000000) %>%
+    select(THETA1:get(paste0("THETA",itemNo*5))) %>%
+    gather(THETA1:get(paste0("THETA",itemNo*5)),key="THETA",value="Value") %>%
+    mutate(THETA = as.numeric(str_replace(THETA, "THETA", "")))
+  
+  param_t <- param %>%
+    mutate(ITEM = (row_number() -1) %/% 5 +1,
+           paraI = rep(1:5,itemNo),
+           lag1 = lag(Value),
+           lag2 = lag(Value,n=2),
+           lag3 = lag(Value,n=3),
+           VALUE = case_when(
+             (row_number() -1) %% 5 == 0 ~ Value,
+             (row_number() -1) %% 5 == 1 ~ Value,
+             (row_number() -1) %% 5 == 2 ~ Value + lag1,
+             (row_number() -1) %% 5 == 3 ~ Value + lag1 +lag2,
+             (row_number() -1) %% 5 == 4 ~ Value + lag1 +lag2 + lag3)) %>%
+    select(c(ITEM,paraI,THETA,VALUE))
+  
+  nthetaValue <- param_t %>% 
+    group_by(ITEM) %>% 
+    slice(1) %>% 
+    mutate(DIS = VALUE) %>% 
+    select(-c(VALUE,THETA,paraI)) %>% 
+    right_join(param_t,by=c("ITEM")) %>% 
+    mutate(Value = case_when(
+      paraI == 1 ~ VALUE,
+      # TRUE ~ -VALUE * DIS)) %>% # (d = -ab)
+      TRUE ~ -VALUE)) %>% 
+    ungroup() %>% 
+    select(Value)
+  
+  pars <- nthetaValue %>% 
+    as.tibble %>% 
+    mutate(ITEM = (row_number() -1) %/% 5 +1,
+           paraI = rep(1:5,itemNo)) %>% 
+    spread(paraI,Value) %>% 
+    rename(a1 = `1`,
+           d1 = `2`,
+           d2 = `3`,
+           d3 = `4`,
+           d4 = `5`) %>% 
+    select(-ITEM)
+}
+
+### From final model  
+pars <- fItemPara("run133",33)
+
+## Selected Items from final model
+sItem <- c(11,9,13,15,17,5,7)
+parsr <- pars %>% 
+  filter(row_number() %in% sItem)
+
+## obj & objr used for Disability estimation
+obj <- generate.mirt_object(pars, 'graded')
+objr <- generate.mirt_object(parsr, 'graded')
+
+## Get the item parameters from the reduced model (selected 7 items) 
+## from aD -ab  (run134)
+parsr2 <- fItemPara("run134",7)
+objr2 <- generate.mirt_object(parsr2, 'graded')
+
+
+### Read simulation result & Set all scenarios ########################################
+# from NONMEM output (raw data) With drug effect on slope
+# sdtab001-100 are different drug effects on slope
+
+setwd("C:/Users/ys278065/Desktop/IRT/Simulation")
+
+Sample <-c(100,200,300,400,500,600,700,800)
+EOT <- c(0.5,1,1.5,2)
+Nsim <- 100
+
+### Function for statistical analyses#############################
+### LRT for ANCOVA on DV
+flrt4 <- function(df) {
+  mod0 <- lm(DV ~ BDV ,data=df)
+  mod1 <- lm(DV ~ BDV + DRUGE ,data=df)
+  lrtr <- anova(mod0,mod1)
+  lrtr$`Pr(>F)`[[2]]
+}
+### Calculate Power from all Nsim simulations for each scenario
+### DVI=0, Disability; DVI=1 Total score
+fglrt4 <- function(fulldf,DVI=1) {
+  tmpdf <-  fulldf %>% 
+    mutate(DV = dTS*DVI + dDIAB*(1-DVI),
+           BDV = BTS*DVI + BDIAB*(1-DVI)) %>% 
+    filter(TIME >0) %>% 
+    split(.$SimNO)
+  Pvaluest <- map_dbl(tmpdf,flrt4)
+  sum(Pvaluest <0.05,na.rm=T)/length(Pvaluest)
+}
+### Functions for calculating Disability ########################
+### from fixed item parameters 
+
+fDfit <- function(df,objt=obj){
+  dft <- df %>% 
+    mutate(dID = ifelse(TIME ==0,ID,ID+10000))
+  dftI0 <- dft %>% 
+    select(dID,ITEM,DV) %>% 
+    spread(ITEM,DV) 
+  
+  dID <- dftI0$dID
+  dftI0 <- dftI0 %>% 
+    select(-dID)
+  # key step: estimate Disability(F1)
+  md <- fscores(objt,response.pattern = dftI0) %>% 
+    as.tibble() %>% 
+    select(F1)
+  DD <- dft %>% 
+    group_by(ID,TIME) %>% 
+    slice(1) %>% 
+    ungroup() %>% 
+    left_join(as.tibble(cbind(dID,md)),
+              by=c("dID")) %>% 
+    arrange(ID,TIME)
+  DD <- DD %>% 
+    group_by(ID) %>% 
+    slice(1) %>% 
+    mutate(BF1=F1,BDIAB=DIAB) %>% 
+    select(ID,BF1,BDIAB) %>% 
+    right_join(DD,by=c("ID")) %>% 
+    mutate(dDm = F1 - BF1,
+           dDIAB = DIAB - BDIAB) %>% 
+    arrange(ID,TIME,DID,DRUGE) %>% 
+    select(-c(ITEM,DV)) %>% 
+    ungroup()
+}
+
+fdflag <- function(df,DVI=1) {
+  tmpdf <-  df %>% 
+    mutate(DV = dDm*DVI + dDIAB*(1-DVI),
+           BDV = BF1*DVI + BDIAB*(1-DVI)) %>% 
+    filter(TIME >0) 
+  Pvaluest <- flrt4(tmpdf)
+}
+
+# Assign Obj for all items
+fDDcomrAll <- function(df,objt=obj,DVI=1){
+  tmp<- fDfit(df,objt)
+  fdflag (tmp,DVI)
+}
+fglrtDDrAll <- function(fulldf,DVI=1) {
+  tmpdf <-  fulldf %>%
+    split(.$SimNO)
+  Pvalues <- map_dbl(tmpdf,fDDcomrAll)
+  sum(Pvalues <0.05,na.rm=T)/length(Pvalues)
+}
+
+# Assign Obj=objr for Selected items
+fDDcomrS <- function(df,objt=objr,DVI=1){
+  tmp<- fDfit(df,objt)
+  fdflag (tmp,DVI)
+}
+fglrtDDrS <- function(fulldf,DVI=1) {
+  tmpdf <-  fulldf %>%
+    split(.$SimNO)
+  Pvalues <- map_dbl(tmpdf,fDDcomrS)
+  sum(Pvalues <0.05,na.rm=T)/length(Pvalues)
+}
+
+# Assign Obj=objr2 for Selected items and reduced model
+fDDcomrS2 <- function(df,objt=objr2,DVI=1){
+  tmp<- fDfit(df,objt)
+  fdflag (tmp,DVI)
+}
+fglrtDDrS2 <- function(fulldf,DVI=1) {
+  tmpdf <-  fulldf %>%
+    split(.$SimNO)
+  Pvalues <- map_dbl(tmpdf,fDDcomrS2)
+  sum(Pvalues <0.05,na.rm=T)/length(Pvalues)
+}
+
+fPower <- function(sdtabname){
+  dat <- read_table(file=sdtabname,skip=1,col_names=T)
+  # # Calculate the number of simulations (from ID == NA)
+  # Nsim <- dat %>%
+  #   filter(is.na(ID)) %>%
+  #   nrow()/2 + 1
+
+  # Get rid of all ID == NA (Table & ID in the first column)
+  # Add indicator of simlation to the dataset
+  dat <- dat %>%
+    filter(!is.na(ID)) %>%
+    mutate(SimNO = (row_number()-1) %/% (nrow(.)/Nsim) +1) %>%
+    mutate(DID = ifelse(ID %% 800 == 0, 800, ID %% 800)) %>%  # only for run039
+    mutate(TIME = TIME/360)
+
+  ### Set all scenarios the same as simulation setting
+  
+  Eff <- dat$DRUGE[dat$DRUGE>0][[1]]      #c(0.3,0.5)
+  Scenariosf <- expand.grid(Sample=Sample,EOT=EOT,
+                            Eff=Eff) %>% 
+    as.data.frame() 
+  
+  ### Power of SoS(Sum of scores) for all items ################
+  
+  datSum <- dat %>% 
+    group_by(ID,TIME,DIAB,DRUGE,SimNO,DID) %>% 
+    summarise(TS = sum(DV)) %>% 
+    ungroup() %>% 
+    arrange(SimNO,ID,TIME,DID,DRUGE)
+  # Add change from Baseline
+  datSum <- datSum %>% 
+    group_by(ID,SimNO) %>% 
+    slice(1) %>% 
+    mutate(BTS=TS,BDIAB = DIAB) %>% 
+    select(ID,SimNO,BTS,BDIAB) %>% 
+    right_join(datSum,by=c("ID","SimNO")) %>% 
+    mutate(dTS = TS - BTS,
+           dDIAB = DIAB - BDIAB) %>% 
+    arrange(SimNO,ID,TIME,DID,DRUGE) %>% 
+    ungroup()
+  # Subset dataset according to different SampleSize, EOF&Eff
+  fSIMdfn <- function(Samplef, EOTf, Efff) {
+    datSum %>% 
+      filter(DID <= Samplef & 
+               TIME %in% c(0,EOTf) & 
+               DRUGE %in% c(0,Efff))
+  }
+  # nest data of all scenatios to the list
+  Scenarios1 <-Scenariosf %>% 
+    mutate(data = pmap(as.list(.),fSIMdfn)) 
+  
+  Scenarios1 <- Scenarios1 %>% 
+    mutate(dTSancova = map2_dbl(.$data,1,fglrt4),
+           dDancova = map2_dbl(.$data,0,fglrt4))
+  Scenarios1R <- Scenarios1 %>% 
+    select(-data)
+  
+  rm(Scenarios1)
+  rm(datSum)
+  
+  ### Power of SoS(Sum of scores) for selected 7 items ###############
+  
+  datSumr <- dat %>% 
+    group_by(ID,TIME,DIAB,DRUGE,SimNO,DID) %>% 
+    filter(ITEM %in% sItem) %>% 
+    summarise(TS = sum(DV)) %>% 
+    ungroup() %>% 
+    arrange(SimNO,ID,TIME,DID,DRUGE)
+  datSumr <- datSumr %>% 
+    group_by(ID,SimNO) %>% 
+    slice(1) %>% 
+    mutate(BTS=TS,BDIAB = DIAB) %>% 
+    select(ID,SimNO,BTS,BDIAB) %>% 
+    right_join(datSumr,by=c("ID","SimNO")) %>% 
+    mutate(dTS = TS - BTS,
+           dDIAB = DIAB - BDIAB) %>% 
+    arrange(SimNO,ID,TIME,DID,DRUGE) %>% 
+    ungroup()
+  
+  fSIMdfnr <- function(Samplef, EOTf, Efff) {
+    datSumr %>% 
+      filter(DID <= Samplef & 
+               TIME %in% c(0,EOTf) & 
+               DRUGE %in% c(0,Efff))
+  }
+  Scenarios2 <-Scenariosf %>% 
+    mutate(data = pmap(as.list(.),fSIMdfnr)) 
+  Scenarios2 <- Scenarios2 %>% 
+    mutate(dTSancova = map2_dbl(.$data,1,fglrt4))
+  
+  Scenarios2R <- Scenarios2 %>% 
+    select(-data)
+  rm(Scenarios2)
+  rm(datSumr)
+
+  ### Power of Disabilty from all items ########################
+  # Subset dataset according to different SampleSize, EOF&Eff
+  fSIMdfnIall <- function(Samplef, EOTf, Efff ) {
+    dat %>% 
+      filter(DID <= Samplef & 
+               TIME %in% c(0,EOTf) & 
+               DRUGE %in% c(0,Efff))
+  }
+  
+  # data is too big and read and remove object during loop
+  nsec <-8
+  ScenariosI2R <- tibble()
+  for (i in 1:nsec) {
+    if (i == 1){
+      tmp <- Scenariosf %>% 
+        filter(row_number()<=n()/nsec) %>% 
+        mutate(data = pmap(as.list(.),fSIMdfnIall)) 
+    } else {
+      tmp <- Scenariosf %>% 
+        filter(row_number()>n()*(i-1)/nsec & row_number()<=n()*i/nsec) %>% 
+        mutate(data = pmap(as.list(.),fSIMdfnIall)) 
+    }
+    tmp <- tmp %>% 
+      mutate(Power = map2_dbl(.$data,1,fglrtDDrAll)) %>% 
+      select(-data)
+    ScenariosI2R <- rbind(ScenariosI2R,tmp)
+  }
+  
+  ### Power of Disabilty from selected 7 items #################
+  
+  datItemS <- dat %>% 
+    filter(ITEM %in% sItem)
+  
+  rm(dat)
+  # Subset dataset according to different SampleSize, EOF&Eff
+  fSIMdfnI <- function(Samplef, EOTf, Efff ) {
+    datItemS %>% 
+      filter(DID <= Samplef & 
+               TIME %in% c(0,EOTf) & 
+               DRUGE %in% c(0,Efff))
+  }
+  # nsec <-8
+  ScenariosI1R <- tibble()
+  for (i in 1:nsec) {
+    if (i == 1){
+      tmp <- Scenariosf %>% 
+        filter(row_number()<=n()/nsec) %>% 
+        mutate(data = pmap(as.list(.),fSIMdfnI)) 
+    } else {
+      tmp <- Scenariosf %>% 
+        filter(row_number()>n()*(i-1)/nsec & row_number()<=n()*i/nsec) %>% 
+        mutate(data = pmap(as.list(.),fSIMdfnI)) 
+    }
+    tmp <- tmp %>% 
+      mutate(D1 = map2_dbl(.$data,1,fglrtDDrS),
+             D2 = map2_dbl(.$data,1,fglrtDDrS2)) %>% 
+      select(-data)
+    ScenariosI1R <- rbind(ScenariosI1R,tmp)
+  }
+  
+  rm(datItemS)
+  
+  simRlist <- list(Scenarios1R,Scenarios2R,
+                   ScenariosI1R,ScenariosI2R)
+  simRlist[[1]] <- simRlist[[1]] %>% 
+    rename(Total_Items = dTSancova,
+           Simulated_D = dDancova)
+  simRlist[[2]] <- simRlist[[2]] %>% 
+    rename(Selected_Items = dTSancova)
+  simRlist[[3]] <- simRlist[[3]] %>% 
+    rename(Estimated_D_Selected_Items = D1,
+           Estimated2_D_Selected_Items = D2)
+  simRlist[[4]] <- simRlist[[4]] %>% 
+    rename(Estimated_D_All_Items = Power)
+  
+  simRdf <- simRlist %>% 
+    reduce(left_join,by=c("Sample","EOT","Eff"))
+  
+  simRdf4plot <- simRdf %>% 
+    gather(Total_Items:Estimated_D_All_Items,
+           key="Method",value="Power") %>% 
+    mutate(EOT = paste0("EOT ", EOT),
+           Eff = Eff,
+           DV = ifelse(str_detect(Method, "D"),"Disability","Sum of Scores"),
+           ItemNO = ifelse(str_detect(Method, "Selected"),"7","33"),
+           RefD = ifelse(Method == "Simulated_D","Simulated","Estimated"),
+           ItemNO = factor(ItemNO, levels = c("33","7")))
+  write.csv(simRdf4plot,paste0('Power',sdtabname,".csv"),
+            row.names=F,quote=F,na = ".")
+}
+
+# system.time(fPower('sdtab001'))
+sdtab <- paste0("sdtab",sprintf("%03.0f", 1:100))
+# Warning: Next step will take ~ 6 days. 1.3hr per iteration
+system.time(walk(sdtab,fPower))
+
+# Read all csv files of Power  --------------------------------------------
+
+PowerfileNames <- paste0('Power',"sdtab",sprintf("%03.0f", 1:100),".csv")
+powerdata <- map(PowerfileNames,read_csv) %>% 
+  reduce(bind_rows)
+str(powerdata)
+
+assurancedata <- powerdata %>% 
+  filter(RefD !="Simulated" &
+           Method != "Estimated2_D_Selected_Items") %>% 
+  group_by(Sample,EOT,Method,DV,ItemNO,RefD) %>% 
+  summarize(assurance = mean(Power)) %>% 
+  ungroup()
+assurancedata$ItemNO <- factor(assurancedata$ItemNO,levels=c("33","7"))
+
+assurancedata %>% ggplot(aes(x=Sample,y=assurance)) +
+  geom_line(aes(colour=DV,linetype=ItemNO),size=1) +
+  # geom_hline(yintercept =0.8,linetype=2) +
+  facet_grid( ~ EOT) +
+  xlab("Sample size") 
+
+# Check the distribution of Effects
+powerdata %>% 
+  group_by(Eff) %>% 
+  slice(1) %>% 
+  ggplot(aes(x=Eff)) +
+  geom_histogram(bins = 15) 
+
+powerdata %>% 
+  group_by(Eff) %>% 
+  slice(1) %>% 
+  ggplot(aes(x=Eff)) +
+  geom_density() 

@@ -478,89 +478,43 @@ fPower <- function(sdtabname){
 }
 
 
-system.time(fPower('sdtab099'))
 
-# sdtab <- paste0("sdtab00",5:10)
-# system.time(walk(sdtab,fPower))
-sdtab <- paste0("sdtab0",93:99)
+# system.time(fPower('sdtab001'))
+sdtab <- paste0("sdtab",sprintf("%03.0f", 1:100))
+# Warning: Next step will take ~ 6 days. 1.3hr per iteration
 system.time(walk(sdtab,fPower))
-stopCluster(cl)
 
+# Read all csv files of Power  --------------------------------------------
+setwd("K:\\1.Project\\LRRK2\\IRT\\NONMEM&R\\Simulation\\4Assurance")
+PowerfileNames <- paste0('Power',"sdtab",sprintf("%03.0f", 1:100),".csv")
+powerdata <- map(PowerfileNames,read_csv) %>% 
+  reduce(bind_rows)
+str(powerdata)
 
+assurancedata <- powerdata %>% 
+  filter(RefD !="Simulated" &
+           Method != "Estimated2_D_Selected_Items") %>% 
+  group_by(Sample,EOT,Method,DV,ItemNO,RefD) %>% 
+  dplyr::summarize(assurance = mean(Power)) %>% 
+  ungroup()
+assurancedata$ItemNO <- factor(assurancedata$ItemNO,levels=c("33","7"))
 
-# sdtabname <- "sdtab002"
-# write.csv(simRdf4plot,paste0('Power','sdtab001',".csv"),
-#           row.names=F,quote=F,na = ".")
-
-
-
-
-# Disability of selected items from 2 estimation model 
-simRdf4plot %>% 
-  filter(ItemNO == "7" & DV=="Disability") %>% 
-  ggplot(aes(x=Sample,y=Power)) +
-  geom_line(aes(colour=Method),size=1) +
-  geom_hline(yintercept =0.8,linetype=2) +
-  facet_grid(EOT ~ Eff) +
-  scale_y_continuous(breaks = seq(0,1,0.2)) +
-  xlab("Sample size")
-
-SimD <- simRdf4plot %>% 
-  filter( RefD =="Simulated") 
-SimDr <- simRdf4plot %>% 
-  filter( Method == "Estimated2_D_Selected_Items") 
-
-# all methods
-simRdf4plot %>% 
-  filter( RefD !="Simulated" &
-            Method != "Estimated2_D_Selected_Items") %>% 
-  ggplot(aes(x=Sample,y=Power)) +
+assurancedata %>% ggplot(aes(x=Sample,y=assurance)) +
   geom_line(aes(colour=DV,linetype=ItemNO),size=1) +
-  geom_hline(yintercept =0.8,linetype=2) +
-  geom_line(data=SimD, aes(x=Sample,y=Power),
-            colour="gray48",linetype=2) +
-  geom_line(data=SimDr, aes(x=Sample,y=Power),
-            colour="blue",linetype=1) +
-  facet_grid(EOT ~ Eff) +
-  scale_y_continuous(breaks = seq(0,1,0.2)) +
-  xlab("Sample size") +
-  theme_light()
-
-# For slides
-simRdf4plot %>% 
-  filter( RefD !="Simulated" &
-            Method != "Estimated2_D_Selected_Items") %>% 
-  ggplot(aes(x=Sample,y=Power)) +
-  geom_line(aes(colour=DV,linetype=ItemNO),size=1) +
-  geom_hline(yintercept =0.8,linetype=2) +
-  facet_grid(EOT ~ Eff) +
-  scale_y_continuous(breaks = seq(0,1,0.2)) +
+  # geom_hline(yintercept =0.8,linetype=2) +
+  facet_grid( ~ EOT) +
   xlab("Sample size") 
 
-simRdf4plot %>% 
-  filter( RefD !="Simulated" &
-            Method != "Estimated2_D_Selected_Items") %>% 
-  ggplot(aes(x=Sample,y=Power)) +
-  geom_line(aes(colour=DV,linetype=ItemNO),size=1) +
-  geom_hline(yintercept =0.8,linetype=2) +
-  facet_grid(Eff~EOT) +
-  scale_y_continuous(breaks = seq(0,1,0.2)) +
-  xlab("Sample size") 
+# Check the distribution of Effects
+powerdata %>% 
+  group_by(Eff) %>% 
+  slice(1) %>% 
+  ggplot(aes(x=Eff)) +
+  geom_histogram(bins = 12) 
 
-# simRdf4plot %>% 
-#   filter(ItemNO == "33") %>% 
-#   ggplot(aes(x=Sample,y=Power)) +
-#   geom_line(aes(colour=DV,linetype=RefD),size=1) +
-#   geom_hline(yintercept =0.8,linetype=2) +
-#   facet_grid(EOT ~ Eff) +
-#   scale_y_continuous(breaks = seq(0,1,0.2)) +
-#   xlab("Sample size")
-# 
-# simRdf4plot %>% 
-#   ggplot(aes(x=Sample,y=Power)) +
-#   geom_line(aes(colour=Method,linetype=RefD),size=1) +
-#   geom_hline(yintercept =0.8,linetype=2) +
-#   facet_grid(EOT ~ Eff) +
-#   scale_y_continuous(breaks = seq(0,1,0.2)) +
-#   xlab("Sample size") +
-#   theme_light()
+powerdata %>% 
+  group_by(Eff) %>% 
+  slice(1) %>% 
+  ggplot(aes(x=Eff)) +
+  geom_density() 
+

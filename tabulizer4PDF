@@ -1,0 +1,18 @@
+remotes::install_github(c("ropensci/tabulizerjars", "ropensci/tabulizer"))
+library(tabulizer)
+library(dplyr)
+# Location of WARN notice pdf file
+location <- 'http://www.edd.ca.gov/jobs_and_training/warn/WARN-Report-for-7-1-2016-to-06-30-2017.pdf'
+
+# Extract the table
+out <- extract_tables(location)
+final <- do.call(rbind, out[-length(out)])
+# table headers get extracted as rows with bad formatting. Dump them.
+final <- as.data.frame(final[3:nrow(final), ])
+head(final)
+# Column names
+headers <- c('Notice.Date', 'Effective.Date', 'Received.Date', 'Company', 'City', 
+             'No.of.Employees', 'Layoff/Closure')
+
+# Apply custom column names
+names(final) <- headers
